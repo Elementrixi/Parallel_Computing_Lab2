@@ -26,6 +26,10 @@ class Task implements Runnable {
         }
         System.out.println("Task " + id + " completed.");
     }
+
+    public int getId() {
+        return id;
+    }
 }
 
 class WorkerThread extends Thread {
@@ -72,6 +76,13 @@ class WorkerThread extends Thread {
 class ThreadPool {
     private final WorkerThread[] threads;
     private final Queue<Runnable> taskQueue;
+    private long maxQueueFullTime = 0;
+    private long minQueueFullTime = Long.MAX_VALUE;
+    private int sizePrev = 0;
+    private static long queueFullStartTime = 0;
+    boolean flag = false;
+
+
 
     public ThreadPool(int nThreads) {
         this.threads = new WorkerThread[nThreads];
@@ -83,11 +94,24 @@ class ThreadPool {
         }
     }
 
+
     public void submitTask(Runnable task) {
         synchronized (taskQueue) {
-            if (taskQueue.size() >= 20) {
-                //  System.err.println("Task queue is full. Task dropped.");
+            if (taskQueue.size() == 20) {
+                if (!flag) {
+                    queueFullStartTime = System.currentTimeMillis();
+                    flag = true;
+                }
+                sizePrev = 20;
+//                System.err.println("Task queue is full. Task " + ((Task) task).getId()+ " dropped.");
                 return;
+            }
+            synchronized (taskQueue) {
+                if (sizePrev == 20 && taskQueue.size() < 20) {
+                    sizePrev = taskQueue.size();
+                    flag = false;
+                    updateQueueFullTime();
+                }
             }
             taskQueue.offer(task);
             taskQueue.notify();
@@ -96,10 +120,6 @@ class ThreadPool {
 
     public synchronized void pause(long duration) throws InterruptedException {
         Thread.sleep(duration);
-    }
-
-    public int getCurrentQueueSize() {
-        return taskQueue.size();
     }
 
     public void shutdown() {
@@ -121,9 +141,29 @@ class ThreadPool {
             }
         }
     }
+
+    public synchronized void updateQueueFullTime() {
+        long endTime = System.currentTimeMillis();
+        long duration = (endTime - queueFullStartTime);
+        if (duration > maxQueueFullTime) {
+            maxQueueFullTime = duration;
+        }
+        if (duration < minQueueFullTime && duration > 1) {
+            minQueueFullTime = duration;
+        }
+    }
+
+    public long getMaxQueueFullTime() {
+        return maxQueueFullTime;
+    }
+
+    public long getMinQueueFullTime() {
+        return minQueueFullTime;
+    }
+
 }
 
-class Main1 {
+class Main {
     public static void main(String[] args) throws InterruptedException {
         ThreadPool threadPool = new ThreadPool(6);
 
@@ -131,17 +171,16 @@ class Main1 {
 
         final long[] totalWaitingTime = {0};
         final int[] totalTasksStarted = {0};
-        final int[] totalTasksDropped = {0};
         final long[] maxQueueWaitTime = {0};
         final long[] minQueueWaitTime = {Long.MAX_VALUE};
 
-        long testDuration = 30 * 1000;
+        long testDuration = 10 * 1000;
         long endTime = startTime + testDuration;
 
         Thread taskAdderThread = new Thread(() -> {
             while (System.currentTimeMillis() < endTime) {
-                Thread thread1 = new Thread(() -> addTasks(threadPool, totalWaitingTime, totalTasksStarted, totalTasksDropped, maxQueueWaitTime, minQueueWaitTime, endTime));
-                Thread thread2 = new Thread(() -> addTasks(threadPool, totalWaitingTime, totalTasksStarted, totalTasksDropped, maxQueueWaitTime, minQueueWaitTime, endTime));
+                Thread thread1 = new Thread(() -> addTasks(threadPool, totalWaitingTime, totalTasksStarted, maxQueueWaitTime, minQueueWaitTime, endTime));
+                Thread thread2 = new Thread(() -> addTasks(threadPool, totalWaitingTime, totalTasksStarted, maxQueueWaitTime, minQueueWaitTime, endTime));
                 thread1.start();
                 thread2.start();
 
@@ -161,23 +200,21 @@ class Main1 {
         final String ANSI_RESET = "\u001B[0m";
 
         System.out.println(ANSI_GREEN + "\nPool in shutting down\n" + ANSI_RESET);
-        threadPool.shutdownAndExecute();
-//        threadPool.shutdown();
+//        threadPool.shutdownAndExecute();
+        threadPool.shutdown();
 
         double averageWaitingTime = (double) totalWaitingTime[0] / totalTasksStarted[0];
         threadPool.pause(5000);
         long endTimeAll = System.currentTimeMillis() - startTime;
 
         System.out.println("Total Tasks Started: " + totalTasksStarted[0]);
-        System.out.println("Total Tasks Dropped: " + totalTasksDropped[0]);
-        System.out.println("Total Tasks Executed: " + (totalTasksStarted[0] - totalTasksDropped[0]));
         System.out.printf("Average Waiting Time per Thread: %.10f milliseconds\n", averageWaitingTime);
-        System.out.println("Maximum Time Task Waited in Queue: " + maxQueueWaitTime[0] + " milliseconds");
-        System.out.println("Minimum Time Task Waited in Queue: " + minQueueWaitTime[0] + " milliseconds");
-        System.out.println("Total time: " + endTimeAll);
+        System.out.println("Maximum Time Task Waited in Queue: " + threadPool.getMaxQueueFullTime() + " milliseconds");
+        System.out.println("Minimum Time Task Waited in Queue: " + threadPool.getMinQueueFullTime() + " milliseconds");
+        System.out.println("Total time: " + endTimeAll / 1000.0);
     }
 
-    private static synchronized void addTasks(ThreadPool threadPool, long[] totalWaitingTime, int[] totalTasksExecuted, int[] totalTasksDropped, long[] maxQueueWaitTime, long[] minQueueWaitTime, long endTime) {
+    private static synchronized void addTasks(ThreadPool threadPool, long[] totalWaitingTime, int[] totalTasksExecuted, long[] maxQueueWaitTime, long[] minQueueWaitTime, long endTime) {
         while (System.currentTimeMillis() < endTime) {
             int taskId = totalTasksExecuted[0] + 1;
             Task task = new Task(taskId);
@@ -186,18 +223,6 @@ class Main1 {
 
             long threadWaitTime = System.currentTimeMillis() - taskStartTime;
             totalWaitingTime[0] += threadWaitTime;
-
-            int currentQueueSize = threadPool.getCurrentQueueSize();
-
-            if (currentQueueSize >= 20) {
-                if (threadWaitTime > maxQueueWaitTime[0]) {
-                    maxQueueWaitTime[0] = threadWaitTime;
-                }
-                if (threadWaitTime < minQueueWaitTime[0]) {
-                    minQueueWaitTime[0] = threadWaitTime;
-                }
-                totalTasksDropped[0]++;
-            }
 
             totalTasksExecuted[0]++;
         }
