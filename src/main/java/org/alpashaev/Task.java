@@ -4,7 +4,7 @@ import java.util.LinkedList;
 import java.util.Queue;
 import java.util.Random;
 
-class Task implements Runnable {
+class Task {
     private final int id;
     private final int executionTime;
 
@@ -14,7 +14,7 @@ class Task implements Runnable {
         this.executionTime = rand.nextInt(6) + 5;
     }
 
-    @Override
+
     public void run() {
         System.out.println("Task " + id + " started. Executing for " + executionTime + " seconds.");
         try {
@@ -33,17 +33,17 @@ class Task implements Runnable {
 }
 
 class WorkerThread extends Thread {
-    private final Queue<Runnable> taskQueue;
+    private final Queue<Task> taskQueue;
     private boolean running = true;
 
-    public WorkerThread(Queue<Runnable> taskQueue) {
+    public WorkerThread(Queue<Task> taskQueue) {
         this.taskQueue = taskQueue;
     }
 
     @Override
     public void run() {
         while (running) {
-            Runnable task = null;
+            Task task = null;
             synchronized (taskQueue) {
                 while (taskQueue.isEmpty() && running) {
                     try {
@@ -63,19 +63,19 @@ class WorkerThread extends Thread {
         }
     }
 
-    public void shutdown() {
+    public synchronized void shutdown() {
         running = false;
         interrupt();
     }
 
-    public void setRunning(boolean status) {
+    public synchronized void setRunning(boolean status) {
         running = status;
     }
 }
 
 class ThreadPool {
     private final WorkerThread[] threads;
-    private final Queue<Runnable> taskQueue;
+    private final Queue<Task> taskQueue;
     private long maxQueueFullTime = 0;
     private long minQueueFullTime = Long.MAX_VALUE;
     private int sizePrev = 0;
@@ -95,7 +95,7 @@ class ThreadPool {
     }
 
 
-    public void submitTask(Runnable task) {
+    public synchronized void submitTask(Task task) {
         synchronized (taskQueue) {
             if (taskQueue.size() == 20) {
                 if (!flag) {
@@ -122,13 +122,13 @@ class ThreadPool {
         Thread.sleep(duration);
     }
 
-    public void shutdown() {
+    public synchronized void shutdown() {
         for (WorkerThread thread : threads) {
             thread.shutdown();
         }
     }
 
-    public void shutdownAndExecute() {
+    public synchronized void shutdownAndExecute() {
         for (WorkerThread thread : threads) {
             thread.setRunning(false);
         }
@@ -171,16 +171,14 @@ class Main {
 
         final long[] totalWaitingTime = {0};
         final int[] totalTasksStarted = {0};
-        final long[] maxQueueWaitTime = {0};
-        final long[] minQueueWaitTime = {Long.MAX_VALUE};
 
         long testDuration = 10 * 1000;
         long endTime = startTime + testDuration;
 
         Thread taskAdderThread = new Thread(() -> {
             while (System.currentTimeMillis() < endTime) {
-                Thread thread1 = new Thread(() -> addTasks(threadPool, totalWaitingTime, totalTasksStarted, maxQueueWaitTime, minQueueWaitTime, endTime));
-                Thread thread2 = new Thread(() -> addTasks(threadPool, totalWaitingTime, totalTasksStarted, maxQueueWaitTime, minQueueWaitTime, endTime));
+                Thread thread1 = new Thread(() -> addTasks(threadPool, totalWaitingTime, totalTasksStarted, endTime));
+                Thread thread2 = new Thread(() -> addTasks(threadPool, totalWaitingTime, totalTasksStarted, endTime));
                 thread1.start();
                 thread2.start();
 
@@ -214,7 +212,7 @@ class Main {
         System.out.println("Total time: " + endTimeAll / 1000.0);
     }
 
-    private static synchronized void addTasks(ThreadPool threadPool, long[] totalWaitingTime, int[] totalTasksExecuted, long[] maxQueueWaitTime, long[] minQueueWaitTime, long endTime) {
+    private static synchronized void addTasks(ThreadPool threadPool, long[] totalWaitingTime, int[] totalTasksExecuted, long endTime) {
         while (System.currentTimeMillis() < endTime) {
             int taskId = totalTasksExecuted[0] + 1;
             Task task = new Task(taskId);
